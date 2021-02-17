@@ -1980,148 +1980,152 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         # Get comments
         # TODO: Refactor and move to seperate function
         if get_comments:
-            expected_video_comment_count = 0
-            video_comments = []
+            def extract_comments():
+                expected_video_comment_count = video_comments_count = 0
+                comment_xsrf = xsrf_token
 
-            def find_value(html, key, num_chars=2, separator='"'):
-                pos_begin = html.find(key) + len(key) + num_chars
-                pos_end = html.find(separator, pos_begin)
-                return html[pos_begin: pos_end]
+                def find_value(html, key, num_chars=2, separator='"'):
+                    pos_begin = html.find(key) + len(key) + num_chars
+                    pos_end = html.find(separator, pos_begin)
+                    return html[pos_begin: pos_end]
 
-            def search_dict(partial, key):
-                if isinstance(partial, dict):
-                    for k, v in partial.items():
-                        if k == key:
-                            yield v
-                        else:
-                            for o in search_dict(v, key):
+                def search_dict(partial, key):
+                    if isinstance(partial, dict):
+                        for k, v in partial.items():
+                            if k == key:
+                                yield v
+                            else:
+                                for o in search_dict(v, key):
+                                    yield o
+                    elif isinstance(partial, list):
+                        for i in partial:
+                            for o in search_dict(i, key):
                                 yield o
-                elif isinstance(partial, list):
-                    for i in partial:
-                        for o in search_dict(i, key):
-                            yield o
 
-            continuations = []
-            if initial_data:
-                try:
-                    ncd = next(search_dict(initial_data, 'nextContinuationData'))
-                    continuations = [ncd['continuation']]
-                # Handle videos where comments have been disabled entirely
-                except StopIteration:
-                    pass
+                continuations = []
+                if initial_data:
+                    try:
+                        ncd = next(search_dict(initial_data, 'nextContinuationData'))
+                        continuations = [ncd['continuation']]
+                    # Handle videos where comments have been disabled entirely
+                    except StopIteration:
+                        pass
 
-            def get_continuation(continuation, session_token, replies=False):
-                query = {
-                    'pbj': 1,
-                    'ctoken': continuation,
-                }
-                if replies:
-                    query['action_get_comment_replies'] = 1
-                else:
-                    query['action_get_comments'] = 1
+                def get_continuation(continuation, session_token, replies=False):
+                    query = {
+                        'pbj': 1,
+                        'ctoken': continuation,
+                    }
+                    if replies:
+                        query['action_get_comment_replies'] = 1
+                    else:
+                        query['action_get_comments'] = 1
 
-                while True:
-                    content, handle = self._download_webpage_handle(
-                        'https://www.youtube.com/comment_service_ajax',
-                        video_id,
-                        note=False,
-                        expected_status=[413],
-                        data=urlencode_postdata({
-                            'session_token': session_token
-                        }),
-                        query=query,
-                        headers={
-                            'Accept': '*/*',
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:76.0) Gecko/20100101 Firefox/76.0',
-                            'X-YouTube-Client-Name': '1',
-                            'X-YouTube-Client-Version': '2.20201202.06.01'
-                        }
-                    )
+                    while True:
+                        content, handle = self._download_webpage_handle(
+                            'https://www.youtube.com/comment_service_ajax',
+                            video_id,
+                            note=False,
+                            expected_status=[413],
+                            data=urlencode_postdata({
+                                'session_token': session_token
+                            }),
+                            query=query,
+                            headers={
+                                'Accept': '*/*',
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:76.0) Gecko/20100101 Firefox/76.0',
+                                'X-YouTube-Client-Name': '1',
+                                'X-YouTube-Client-Version': '2.20201202.06.01'
+                            }
+                        )
 
-                    response_code = handle.getcode()
-                    if (response_code == 200):
-                        return self._parse_json(content, video_id)
-                    if (response_code == 413):
-                        return None
-                    raise ExtractorError('Unexpected HTTP error code: %s' % response_code)
+                        response_code = handle.getcode()
+                        if (response_code == 200):
+                            return self._parse_json(content, video_id)
+                        if (response_code == 413):
+                            return None
+                        raise ExtractorError('Unexpected HTTP error code: %s' % response_code)
 
-            first_continuation = True
-            chain_msg = ''
-            self.to_screen('Downloading comments')
-            while continuations:
-                continuation = continuations.pop()
-                comment_response = get_continuation(continuation, xsrf_token)
-                if not comment_response:
-                    continue
-                if list(search_dict(comment_response, 'externalErrorMessage')):
-                    raise ExtractorError('Error returned from server: ' + next(search_dict(comment_response, 'externalErrorMessage')))
-
-                if 'continuationContents' not in comment_response['response']:
-                    # Something is wrong here. Youtube won't accept this continuation token for some reason and responds with a user satisfaction dialog (error?)
-                    continue
-                # not sure if this actually helps
-                if 'xsrf_token' in comment_response:
-                    xsrf_token = comment_response['xsrf_token']
-
-                item_section = comment_response['response']['continuationContents']['itemSectionContinuation']
-                if first_continuation:
-                    expected_video_comment_count = int(item_section['header']['commentsHeaderRenderer']['countText']['runs'][0]['text'].replace(' Comments', '').replace('1 Comment', '1').replace(',', ''))
-                    first_continuation = False
-                if 'contents' not in item_section:
-                    # continuation returned no comments?
-                    # set an empty array as to not break the for loop
-                    item_section['contents'] = []
-
-                for meta_comment in item_section['contents']:
-                    comment = meta_comment['commentThreadRenderer']['comment']['commentRenderer']
-                    video_comments.append({
-                        'id': comment['commentId'],
-                        'text': ''.join([c['text'] for c in comment['contentText']['runs']]),
-                        'time_text': ''.join([c['text'] for c in comment['publishedTimeText']['runs']]),
-                        'author': comment.get('authorText', {}).get('simpleText', ''),
-                        'votes': comment.get('voteCount', {}).get('simpleText', '0'),
-                        'author_thumbnail': comment['authorThumbnail']['thumbnails'][-1]['url'],
-                        'parent': 'root'
-                    })
-                    if 'replies' not in meta_comment['commentThreadRenderer']:
+                first_continuation = True
+                chain_msg = ''
+                self.to_screen('Downloading comments')
+                while continuations:
+                    continuation = continuations.pop()
+                    comment_response = get_continuation(continuation, comment_xsrf)
+                    if not comment_response:
                         continue
+                    if list(search_dict(comment_response, 'externalErrorMessage')):
+                        raise ExtractorError('Error returned from server: ' + next(search_dict(comment_response, 'externalErrorMessage')))
 
-                    reply_continuations = [rcn['nextContinuationData']['continuation'] for rcn in meta_comment['commentThreadRenderer']['replies']['commentRepliesRenderer']['continuations']]
-                    while reply_continuations:
-                        time.sleep(1)
-                        continuation = reply_continuations.pop()
-                        replies_data = get_continuation(continuation, xsrf_token, True)
-                        if not replies_data or 'continuationContents' not in replies_data[1]['response']:
+                    if 'continuationContents' not in comment_response['response']:
+                        # Something is wrong here. Youtube won't accept this continuation token for some reason and responds with a user satisfaction dialog (error?)
+                        continue
+                    # not sure if this actually helps
+                    if 'xsrf_token' in comment_response:
+                        comment_xsrf = comment_response['xsrf_token']
+
+                    item_section = comment_response['response']['continuationContents']['itemSectionContinuation']
+                    if first_continuation:
+                        expected_video_comment_count = int(item_section['header']['commentsHeaderRenderer']['countText']['runs'][0]['text'].replace(' Comments', '').replace('1 Comment', '1').replace(',', ''))
+                        first_continuation = False
+                    if 'contents' not in item_section:
+                        # continuation returned no comments?
+                        # set an empty array as to not break the for loop
+                        item_section['contents'] = []
+
+                    for meta_comment in item_section['contents']:
+                        comment = meta_comment['commentThreadRenderer']['comment']['commentRenderer']
+                        video_comments_count += 1
+                        yield {
+                            'id': comment['commentId'],
+                            'text': ''.join([c['text'] for c in comment['contentText']['runs']]),
+                            'time_text': ''.join([c['text'] for c in comment['publishedTimeText']['runs']]),
+                            'author': comment.get('authorText', {}).get('simpleText', ''),
+                            'votes': comment.get('voteCount', {}).get('simpleText', '0'),
+                            'author_thumbnail': comment['authorThumbnail']['thumbnails'][-1]['url'],
+                            'parent': 'root'
+                        }
+                        if 'replies' not in meta_comment['commentThreadRenderer']:
                             continue
 
-                        if self._downloader.params.get('verbose', False):
-                            chain_msg = ' (chain %s)' % comment['commentId']
-                        self.to_screen('Comments downloaded: %d of ~%d%s' % (len(video_comments), expected_video_comment_count, chain_msg))
-                        reply_comment_meta = replies_data[1]['response']['continuationContents']['commentRepliesContinuation']
-                        for reply_meta in reply_comment_meta.get('contents', {}):
-                            reply_comment = reply_meta['commentRenderer']
-                            video_comments.append({
-                                'id': reply_comment['commentId'],
-                                'text': ''.join([c['text'] for c in reply_comment['contentText']['runs']]),
-                                'time_text': ''.join([c['text'] for c in reply_comment['publishedTimeText']['runs']]),
-                                'author': reply_comment.get('authorText', {}).get('simpleText', ''),
-                                'votes': reply_comment.get('voteCount', {}).get('simpleText', '0'),
-                                'author_thumbnail': reply_comment['authorThumbnail']['thumbnails'][-1]['url'],
-                                'parent': comment['commentId']
-                            })
-                        if 'continuations' not in reply_comment_meta or len(reply_comment_meta['continuations']) == 0:
-                            continue
-                        reply_continuations += [rcn['nextContinuationData']['continuation'] for rcn in reply_comment_meta['continuations']]
+                        reply_continuations = [rcn['nextContinuationData']['continuation'] for rcn in meta_comment['commentThreadRenderer']['replies']['commentRepliesRenderer']['continuations']]
+                        while reply_continuations:
+                            time.sleep(1)
+                            continuation = reply_continuations.pop()
+                            replies_data = get_continuation(continuation, comment_xsrf, True)
+                            if not replies_data or 'continuationContents' not in replies_data[1]['response']:
+                                continue
 
-                self.to_screen('Comments downloaded: %d of ~%d' % (len(video_comments), expected_video_comment_count))
-                if 'continuations' in item_section:
-                    continuations += [ncd['nextContinuationData']['continuation'] for ncd in item_section['continuations']]
-                time.sleep(1)
+                            if self._downloader.params.get('verbose', False):
+                                chain_msg = ' (chain %s)' % comment['commentId']
+                            self.to_screen('Comments downloaded: %d of ~%d%s' % (video_comments_count, expected_video_comment_count, chain_msg))
+                            reply_comment_meta = replies_data[1]['response']['continuationContents']['commentRepliesContinuation']
+                            for reply_meta in reply_comment_meta.get('contents', {}):
+                                reply_comment = reply_meta['commentRenderer']
+                                video_comments_count += 1
+                                yield {
+                                    'id': reply_comment['commentId'],
+                                    'text': ''.join([c['text'] for c in reply_comment['contentText']['runs']]),
+                                    'time_text': ''.join([c['text'] for c in reply_comment['publishedTimeText']['runs']]),
+                                    'author': reply_comment.get('authorText', {}).get('simpleText', ''),
+                                    'votes': reply_comment.get('voteCount', {}).get('simpleText', '0'),
+                                    'author_thumbnail': reply_comment['authorThumbnail']['thumbnails'][-1]['url'],
+                                    'parent': comment['commentId']
+                                }
+                            if 'continuations' not in reply_comment_meta or len(reply_comment_meta['continuations']) == 0:
+                                continue
+                            reply_continuations += [rcn['nextContinuationData']['continuation'] for rcn in reply_comment_meta['continuations']]
 
-            self.to_screen('Total comments downloaded: %d of ~%d' % (len(video_comments), expected_video_comment_count))
+                    self.to_screen('Comments downloaded: %d of ~%d' % (video_comments_count, expected_video_comment_count))
+                    if 'continuations' in item_section:
+                        continuations += [ncd['nextContinuationData']['continuation'] for ncd in item_section['continuations']]
+                    time.sleep(1)
+
+                self.to_screen('Total comments downloaded: %d of ~%d' % (video_comments_count, expected_video_comment_count))
+
             info.update({
-                'comments': video_comments,
-                'comment_count': expected_video_comment_count
+                'comments': extract_comments(),
+                # 'comment_count': expected_video_comment_count
             })
 
         self.mark_watched(video_id, player_response)

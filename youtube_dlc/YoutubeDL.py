@@ -2024,6 +2024,9 @@ class YoutubeDL(object):
             self.to_stdout(formatSeconds(info_dict['duration']))
         print_mandatory('format')
         if self.params.get('forcejson', False):
+            if info_dict.get('comments'):
+                info_dict['comments'] = list(info_dict['comments'])
+                info_dict['comment_count'] = len(info_dict['comments'])
             self.to_stdout(json.dumps(info_dict))
 
     def process_info(self, info_dict):
@@ -2046,6 +2049,10 @@ class YoutubeDL(object):
 
         if self._match_entry(info_dict, incomplete=False) is not None:
             return
+
+        if info_dict.get('comments'):
+            info_dict['comments'] = list(info_dict['comments'])
+            info_dict['comment_count'] = len(info_dict['comments'])
 
         self._num_downloads += 1
 
@@ -2489,6 +2496,9 @@ class YoutubeDL(object):
                 raise
             else:
                 if self.params.get('dump_single_json', False):
+                    if res.get('comments'):
+                        res['comments'] = list(res['comments'])
+                        res['comment_count'] = len(res['comments'])
                     self.to_stdout(json.dumps(res))
 
         return self._download_retcode
