@@ -6,7 +6,7 @@ import os.path
 import warnings
 import sys
 from distutils.spawn import spawn
-
+import pkgconfig
 
 # Get the version from yt_dlp/version.py without importing the package
 exec(compile(open('yt_dlp/version.py').read(),
@@ -27,9 +27,15 @@ if len(sys.argv) >= 2 and sys.argv[1] == 'py2exe':
     print("inv")
 else:
     files_spec = [
-        ('share/bash-completion/completions', ['completions/bash/*']),
-        ('share/zsh/site-functions', ['completions/zsh/*']),
-        ('share/fish/vendor_completions.d', ['completions/fish/*']),
+        ((pkgconfig.variables('bash-completion')['completionsdir']
+            if pkgconfig.exists('bash-completion')
+            else 'share/bash-completion/completions'),
+            ['completions/bash/*']),
+        ('share/zsh/site-functions/', ['completions/zsh/*']),
+        ((pkgconfig.variables('fish')['completionsdir']
+            if pkgconfig.exists('fish')
+            else 'share/fish/vendor_completions.d'),
+            ['completions/fish/*']),
         ('share/doc/yt_dlp', ['README.txt']),
         ('share/man/man1', ['yt-dlp.1'])
     ]
@@ -84,7 +90,7 @@ setup(
         'Documentation': 'https://yt-dlp.readthedocs.io',
         'Source': 'https://github.com/yt-dlp/yt-dlp',
         'Tracker': 'https://github.com/yt-dlp/yt-dlp/issues',
-        #'Funding': 'https://donate.pypi.org',
+        # 'Funding': 'https://donate.pypi.org',
     },
     classifiers=[
         "Topic :: Multimedia :: Video",
